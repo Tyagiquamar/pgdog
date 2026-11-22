@@ -347,7 +347,7 @@ impl Databases {
     }
 
     /// Shutdown all pools.
-    fn shutdown(&self) {
+    pub(crate) fn shutdown(&self) {
         for cluster in self.all().values() {
             cluster.shutdown();
         }
@@ -1739,5 +1739,75 @@ mod tests {
 
         cutover("single", "sharded").await.unwrap();
         assert_eq!((shards("single"), shards("sharded")), (1, 2));
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_dumps_idle_and_sets_pools_offline() {
+        let config = Config {
+            databases: vec![Database {
+                name: "test_db".to_string(),
+                host: "localhost".to_string(),
+                port: 5432,
+                role: Role::Primary,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let users = crate::config::Users {
+            users: vec![crate::config::User {
+                name: "test_user".to_string(),
+                database: "test_db".to_string(),
+                password: Some("pass".to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let databases = from_config(&ConfigAndUsers {
+            config,
+            users,
+            config_path: std::path::PathBuf::new(),
+            users_path: std::path::PathBuf::new(),
+            ..Default::default()
+        });
+
+        databases.launch();
+
+        for cluster in databases.all().values() {
+            assert!(cluster.online());
+            for shard in cluster.shards() {
+                for pool in shard.pool_iter() {
+                    assert!(pool.lock().online);
+                    pool.lock()
+                        .idle_connections
+                        .push_back(Box::new(crate::backend::Server::default()));
+                    pool.lock()
+                        .idle_connections
+                        .push_back(Box::new(crate::backend::Server::default()));
+                    assert_eq!(pool.lock().idle(), 2);
+                }
+            }
+        }
+
+        databases.shutdown();
+
+        for cluster in databases.all().values() {
+            assert!(!cluster.online());
+            for shard in cluster.shards() {
+                for pool in shard.pool_iter() {
+                    let guard = pool.lock();
+                    assert!(!guard.online);
+                    assert_eq!(guard.idle(), 0);
+                    drop(guard);
+
+                    let req = crate::backend::pool::Request::default();
+                    assert!(matches!(
+                        pool.get(&req).await,
+                        Err(crate::backend::pool::Error::Offline)
+                    ));
+                }
+            }
+        }
     }
 }

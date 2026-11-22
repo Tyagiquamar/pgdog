@@ -3,7 +3,7 @@
 use std::io::ErrorKind;
 use std::net::SocketAddr;
 
-use crate::backend::databases::{databases, reload};
+use crate::backend::databases::{self, databases, reload};
 use crate::config::config;
 use crate::net::messages::{FrontendPid, NegotiateProtocolVersion, Startup, hello::SslReply};
 use crate::net::tls::{acceptor, peer_certificate_present, peer_identity};
@@ -136,6 +136,8 @@ impl Listener {
 
     async fn execute_shutdown(&self) {
         let shutdown_timeout = config().config.general.shutdown_timeout();
+
+        databases::shutdown();
 
         info!(
             "waiting up to {:.3}s for {} clients to finish transactions",
