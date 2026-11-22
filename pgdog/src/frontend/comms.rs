@@ -130,6 +130,7 @@ impl Comms {
     pub(crate) fn shutdown(&self) {
         self.global.shutdown.cancel();
         self.global.tracker.close();
+        crate::backend::databases::shutdown();
     }
 
     /// Get the shutdown signal.
@@ -232,5 +233,12 @@ mod tests {
 
         comms.disconnect(id);
         assert!(!comms.verify_cancel(&key));
+    }
+
+    #[test]
+    fn test_shutdown_triggers_databases_shutdown() {
+        let comms = Comms::default();
+        comms.shutdown();
+        assert!(comms.offline());
     }
 }
